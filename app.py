@@ -6,6 +6,7 @@ import streamlit as st
 st.set_page_config(page_title='NIL Sponsor Manager', page_icon='🏅', layout='wide')
 DB = Path(__file__).with_name('nil_demo.db')
 
+
 def connect():
     conn = sqlite3.connect(DB)
     conn.execute('PRAGMA foreign_keys = ON')
@@ -19,6 +20,15 @@ def initialize():
             Industry TEXT NOT NULL,
             City TEXT NOT NULL
         )''')
+
+        conn.execute('''CREATE TABLE IF NOT EXISTS NIL_AGREEMENT ( 
+            Agreement_ID TEXT PRIMARY KEY, 
+            Business_ID TEXT NOT NULL, 
+            Athlete_Name TEXT NOT NULL, 
+            Compensation_Amount REAL NOT NULL, 
+            FOREIGN KEY (Business_ID) REFERENCES BUSINESS(Business_ID) 
+        )''') 
+
         count = conn.execute('SELECT COUNT(*) FROM BUSINESS').fetchone()[0]
         if count == 0:
             conn.executemany('INSERT INTO BUSINESS VALUES (?, ?, ?, ?)', [
@@ -28,14 +38,113 @@ def initialize():
                 ('B04','Campus Café','Food & Beverage','Atlanta'),
                 ('B05','Victory Media','Media','Marietta'),
             ])
+        
+        agreement_count = conn.execute('SELECT COUNT(*) FROM NIL_AGREEMENT').fetchone()[0] 
+        if agreement_count == 0: 
+            conn.executemany( 
+                'INSERT INTO NIL_AGREEMENT VALUES (?, ?, ?, ?)', 
+                [('A01', 'B01', 'Jordan Lee', 1200.00), 
+                ('A02', 'B02', 'Taylor Green', 850.00), 
+                ('A03', 'B01', 'Morgan Hill', 500.00)]
+            )
 
 def load_data():
     with connect() as conn:
-        return pd.read_sql_query('SELECT Business_ID, Business_Name, Industry, City FROM BUSINESS ORDER BY Business_Name', conn)
+        return pd.read_sql_query('SELECT Business_ID, Business_Name, Industry, City FROM BUSINESS ORDER BY City, Business_Name', conn)
 
 initialize()
-st.title('🏅 NIL Sponsor Manager')
+st.title('College NIL Business Directory')
 st.caption('A classroom demonstration of Streamlit + Python + SQLite. Fictional businesses only.')
+
+
+st.sidebar.title("Navigation")
+menu = st.sidebar.radio(
+    "Select an option",
+    ["Home", "Business Directory", "NIL Agreements", "Reports"]
+)
+
+if menu == 'Home':
+    st.header("Welcome")
+    st.write("Welcome to the NIL Sponser Manager.")
+    st.write("This is the home page, there are a few options you can select from in our menu for more options.")
+elif menu == "Business Directory":
+    st.header("Business Directory")
+    conn = connect()
+    industries = pd.read_sql_query(
+        "SELECT DISTINCT Industry FROM BUSINESS ORDER BY Industry",
+        conn
+    )
+    choice = st.selectbox(
+        "Select an industry",
+        ["All Industries"] + industries["Industry"].tolist()
+    )
+    if choice == "All Industries":
+        query = """
+            SELECT Business_Name, Industry, City FROM BUSINESS
+            ORDER BY City, Business_Name
+        """
+        df = pd.read_sql_query(query, conn)
+    else:
+        query = """
+            SELECT Business_Name, Industry, City FROM BUSINESS
+            WHERE Industry = ? ORDER BY City, Business_Name
+        """
+        df = pd.read_sql_query(query, conn, params=(choice,))
+        st.dataframe(df)
+        st.write("Number of business:", len(df))
+        conn.close()
+    # query = """
+    #     SELECT Business_Name, Industry, City
+    #     FROM BUSINESS
+    #     ORDER BY City, Business_Name
+    # """
+    # df = pd.read_sql_query(query, conn)
+    # st.dataframe(df)
+    # st.write("Number of business:", len(df))
+    conn.close()
+
+elif menu == "NIL Agreements":
+    st.header("NIL Agreements")
+    conn = connect()
+    query = """
+        SELECT B.Business_Name, N.Athlete_Name,
+                N.Compensation_Amount
+        FROM BUSINESS AS B
+        INNER JOIN NIL_AGREEMENT AS N
+            ON B.Business_ID = N.Business_ID
+        ORDER BY N.Compensation_Amount DESC
+    """
+    df = pd.read_sql_query(query, conn)
+    st.dataframe(df)
+    st.metric(
+        "Total Compensation",
+        f"${df['Compensation_Amount'].sum():,.2f}"
+    )
+    conn.close()
+
+elif menu == "Reports":
+    st.header("Business Summary Report")
+    conn = connect()
+    query = """
+        SELECT B.Business_Name,
+        COUNT(N.Agreement_ID) AS Agreement_Count,
+        COALESCE(SUM(N.Compensation_Amount), 0)
+            AS Total_Compensation
+        FROM BUSINESS AS B
+        LEFT JOIN NIL_AGREEMENT AS N
+            ON B.Business_ID = N.Business_ID
+        GROUP BY B.Business_ID, B.Business_Name
+        ORDER BY Total_Compensation DESC
+    """
+    df = pd.read_sql_query(query, conn)
+    st.dataframe(df)
+    st.subheader("Businesses and their Total Compensations.")
+    st.bar_chart(df.set_index("Business_Name")["Total_Compensation"], x_label='Business Names', y_label='Total Compensation')
+    st.subheader("Number of Agreements per Business.")
+    st.bar_chart(df.set_index("Business_Name")["Agreement_Count"], x_label='Business Names', y_label='Agreements Per Business')
+    conn.close()
+
+
 
 data = load_data()
 a, b, c = st.columns(3)
@@ -94,5 +203,20 @@ with tab3:
         st.success('Deleted.')
         st.rerun()
 
+st.subheader("NIL Agreements by Business") 
+with connect() as conn: 
+    agreements = pd.read_sql_query(""" 
+        SELECT B.Business_Name, N.Athlete_Name, 
+               N.Compensation_Amount 
+        FROM BUSINESS AS B 
+        INNER JOIN NIL_AGREEMENT AS N 
+            ON B.Business_ID = N.Business_ID 
+        ORDER BY N.Compensation_Amount DESC  
+    """, conn) 
+st.dataframe(agreements, use_container_width=True, hide_index=True) 
+
 st.divider()
 st.caption('Teaching note: Streamlit Community Cloud storage is ephemeral; records may reset after restart/redeployment. This demo uses a simplified BUSINESS table, not the full course NIL schema.')
+
+
+
